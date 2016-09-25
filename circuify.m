@@ -4,8 +4,9 @@ function [x, y] = circuify(img)
   N = round(surfacewidth / mindetail);
   x = imgread(img, N);
   y = zeros(N, N);
-  %y = addfoursided(x, y);
-  y = addtwosided(x, y);
+  mask = ones(N, N);
+  [y, mask] = addfoursided(x, y, mask);
+  [y, mask] = addtwosided(x, y, mask);
 end
 
 function [x] = imgread(img, N)
@@ -30,14 +31,15 @@ function [y] = crop2square(x)
   y = x(((S1 - S) / 2 + 1):((S1 + S) / 2), ((S2 - S) / 2 + 1):((S2 + S) / 2));
 end
 
-function [y] = addfoursided(x, y)
+function [y, mask] = addfoursided(x, y, mask)
   k = foursidedkernels(length(x));
   r = crosscorrs(x, k);
+  r = updatecorrs(r, k, mask);
   [rmax, m, n1, n2] = maxcorr(r);
   rmin = rmax / 2;
   while rmax > rmin
-    y = addkernel(y, k{m}, n1, n2);
-    r = updatecorrs(r, k, k{m}, n1, n2);
+    [y, mask] = addkernel(y, k{m}, n1, n2, mask);
+    r = updatecorrs(r, k, mask);
     [rmax, m, n1, n2] = maxcorr(r);
   end
 end
@@ -62,14 +64,15 @@ function [k] = foursidedkernel(M)
   k = normalizekernel(k);
 end
 
-function [y] = addtwosided(x, y)
+function [y, mask] = addtwosided(x, y, mask)
   k = twosidedkernels();
   r = crosscorrs(x, k);
+  r = updatecorrs(r, k, mask);
   [rmax, m, n1, n2] = maxcorr(r);
   rmin = rmax / 2;
   while rmax > rmin
-    [y, kf, n1, n2] = addtwosidedkernel(y, r{m}, k{m}, m, n1, n2);
-    r = updatecorrs(r, k, kf, n1, n2);
+    [y, mask] = addtwosidedkernel(y, r{m}, k{m}, m, n1, n2, mask);
+    r = updatecorrs(r, k, mask);
     [rmax, m, n1, n2] = maxcorr(r);
   end
 end
@@ -88,7 +91,7 @@ function [k] = twosidedkernel(M)
   k = normalizekernel(k);
 end
 
-function [y, kf, n1, n2] = addtwosidedkernel(y, r, k, m, n1, n2)
+function [y, mask] = addtwosidedkernel(y, r, k, m, n1, n2, mask)
   [N1, N2] = size(r);
   switch m
     case 1
@@ -106,10 +109,13 @@ function [y, kf, n1, n2] = addtwosidedkernel(y, r, k, m, n1, n2)
   end
   rmin = r(n1, n2) / 2;
   ns = 0;
-  rf = r(n1 + (ns + 1) * s1, n2 + (ns + 1) * s2);
-  while rf > rmin
+  n1p = n1 + (ns + 1) * s1;
+  n2p = n2 + (ns + 1) * s2;
+  while r(n1p, n2p) > rmin && ...
+        all(mask((n1p - 1):(n1p + 4), (n2p - 1):(n2p + 4)));
     ns = ns + 1;
-    rf = r(n1 + (ns + 1) * s1, n2 + (ns + 1) * s2);
+    n1p = n1 + (ns + 1) * s1;
+    n2p = n2 + (ns + 1) * s2;
   end
   switch m
     case 1
@@ -117,11 +123,13 @@ function [y, kf, n1, n2] = addtwosidedkernel(y, r, k, m, n1, n2)
     case 2
       kf = twosidedkernel(ns + 2).';
   end
-  if s1 + s2 < 0
+  if s1 < 0
     n1 = n1 + ns * s1;
+  end
+  if s2 < 0
     n2 = n2 + ns * s2;
   end
-  y = addkernel(y, kf, n1, n2);
+  [y, mask] = addkernel(y, kf, n1, n2, mask);
 end
 
 function [k] = resistencekernel()
@@ -165,15 +173,20 @@ function [rmax, m, n1, n2] = maxcorr(r)
   n2 = n2(m);
 end
 
-function [y] = addkernel(y, k, n1, n2)
+function [y, mask] = addkernel(y, k, n1, n2, mask)
   [N1, N2] = size(k);
   y(n1:(n1 + N1 - 1), n2:(n2 + N2 - 1)) = k > 0;
+  mask(n1:(n1 + N1 - 1), n2:(n2 + N2 - 1)) = 0;
 end
 
-function [r] = updatecorrs(r, k, kf, n1, n2)
-  [N1k, N2k] = size(kf);
+function [r] = updatecorrs(r, k, mask)
+  [row, col] = find(mask == 0);
   for m = 1:length(r)
-    [N1r, N2r] = size(k{m});
-    r{m}(max(0, n1 - N1r):(n1 + N1k), max(0, n2 - N2r):(n2 + N2k)) = 0;
+    [N1r, N2r] = size(r{m});
+    [N1k, N2k] = size(k{m});
+    for l = 1:length(row)
+      r{m}(max(0, row(l) - N1k):min(N1r, row(l) + 1), ...
+           max(0, col(l) - N2k):min(N2r, col(l) + 1)) = 0;
+    end
   end
 end
