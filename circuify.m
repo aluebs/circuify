@@ -5,8 +5,9 @@ function [x, y] = circuify(img)
   x = imgread(img, N);
   y = zeros(N, N);
   mask = ones(N, N);
-  [y, mask] = addfoursided(x, y, mask);
+  [y, mask] = addkernels(x, y, mask, foursidedkernels(N));
   [y, mask] = addtwosided(x, y, mask);
+  [y, mask] = addkernels(x, y, mask, resistencekernels());
 end
 
 function [x] = imgread(img, N)
@@ -31,8 +32,7 @@ function [y] = crop2square(x)
   y = x(((S1 - S) / 2 + 1):((S1 + S) / 2), ((S2 - S) / 2 + 1):((S2 + S) / 2));
 end
 
-function [y, mask] = addfoursided(x, y, mask)
-  k = foursidedkernels(length(x));
+function [y, mask] = addkernels(x, y, mask, k)
   r = crosscorrs(x, k);
   r = updatecorrs(r, k, mask);
   [rmax, m, n1, n2] = maxcorr(r);
@@ -130,6 +130,12 @@ function [y, mask] = addtwosidedkernel(y, r, k, m, n1, n2, mask)
     n2 = n2 + ns * s2;
   end
   [y, mask] = addkernel(y, kf, n1, n2, mask);
+end
+
+function [k] = resistencekernels()
+  k = cell(2, 1);
+  k{1} = resistencekernel();
+  k{2} = k{1}.';
 end
 
 function [k] = resistencekernel()
