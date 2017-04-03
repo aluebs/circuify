@@ -1,13 +1,21 @@
-function [x, y] = circuify(img)
+function [cntx, orly, mask, v, h, du, dd] = circuify(img)
   mindetail = 0.001;
   surfacewidth = 0.07;
   N = round(surfacewidth / mindetail);
   x = imgread(img, N);
-  y = zeros(N, N);
+  cntx = zeros(N, N);
+  orly = zeros(N, N);
   mask = ones(N, N);
-  [y, mask] = addkernels(x, y, mask, foursidedkernels(N));
-  [y, mask] = addtwosided(x, y, mask);
-  [y, mask] = addkernels(x, y, mask, resistencekernels());
+  Nc = 0;
+  [k4, c4, o4] = foursidedkernels(N);
+  [cntx, orly, mask, Nc] = addkernels(x, cntx, orly, mask, k4, c4, o4, Nc);
+  [cntx, orly, mask, Nc] = addtwosided(x, cntx, orly, mask, Nc);
+  [kr, cr, or] = resistencekernels();
+  [cntx, orly, mask, Nc] = addkernels(x, cntx, orly, mask, kr, cr, or, Nc);
+  v = directionalderivate(x, 1, 0, mask);
+  h = directionalderivate(x, 0, 1, mask);
+  du = directionalderivate(x, 1, 1, mask);
+  dd = directionalderivate(x, 1, -1, mask);
 end
 
 function [x] = imgread(img, N)
@@ -32,66 +40,78 @@ function [y] = crop2square(x)
   y = x(((S1 - S) / 2 + 1):((S1 + S) / 2), ((S2 - S) / 2 + 1):((S2 + S) / 2));
 end
 
-function [y, mask] = addkernels(x, y, mask, k)
+function [cntx, orly, mask, Nc] = addkernels(x, cntx, orly, mask, k, c, o, Nc)
   r = crosscorrs(x, k);
   r = updatecorrs(r, k, mask);
   [rmax, m, n1, n2] = maxcorr(r);
   rmin = rmax / 2;
   while rmax > rmin
-    [y, mask] = addkernel(y, k{m}, n1, n2, mask);
+    [cntx, orly, mask, Nc] = ...
+        addkernel(cntx, orly, c{m}, o{m}, n1, n2, mask, Nc);
     r = updatecorrs(r, k, mask);
     [rmax, m, n1, n2] = maxcorr(r);
   end
 end
 
-function [k] = foursidedkernels(N)
+function [k, c, o] = foursidedkernels(N)
   k = {};
+  c = {};
+  o = {};
   m = 2;
-  ktmp = foursidedkernel(m);
+  [ktmp, ctmp, otmp] = foursidedkernel(m);
   while length(ktmp) < N / 5
     k{m - 1} = ktmp;
+    c{m - 1} = ctmp;
+    o{m - 1} = otmp;
     m = m + 1;
-    ktmp = foursidedkernel(m);
+    [ktmp, ctmp, otmp] = foursidedkernel(m);
   end
 end
 
-function [k] = foursidedkernel(M)
-  k = zeros(2 * M + 3, 2 * M + 3);
-  k(3:2:(end - 2), [1, end]) = 1;
-  k([1, end], 3:2:(end - 2)) = 1;
-  k(3:(end - 2), [3, (end - 2)]) = 1;
-  k([3, (end - 2)], 3:(end - 2)) = 1;
-  k = normalizekernel(k);
+function [k, c, o] = foursidedkernel(M)
+  c = zeros(2 * M + 3, 2 * M + 3);
+  c(3:2:(end - 2), [1, end]) = 1;
+  c([1, end], 3:2:(end - 2)) = 1;
+  o = zeros(2 * M + 3, 2 * M + 3);
+  o(3:(end - 2), [3, (end - 2)]) = 1;
+  o([3, (end - 2)], 3:(end - 2)) = 1;
+  k = normalizekernel(c | o);
 end
 
-function [y, mask] = addtwosided(x, y, mask)
-  k = twosidedkernels();
+function [cntx, orly, mask, Nc] = addtwosided(x, cntx, orly, mask, Nc)
+  [k, c, o] = twosidedkernels();
   r = crosscorrs(x, k);
   r = updatecorrs(r, k, mask);
   [rmax, m, n1, n2] = maxcorr(r);
   rmin = rmax / 2;
   while rmax > rmin
-    [y, mask] = addtwosidedkernel(y, r{m}, k{m}, m, n1, n2, mask);
+    [cntx, orly, mask, Nc] = ...
+        addtwosidedkernel(cntx, orly, r{m}, m, n1, n2, mask, Nc);
     r = updatecorrs(r, k, mask);
     [rmax, m, n1, n2] = maxcorr(r);
   end
 end
 
-function [k] = twosidedkernels(N)
+function [k, c, o] = twosidedkernels()
   k = cell(2, 1);
-  k{1} = twosidedkernel(2);
+  c = cell(2, 1);
+  o = cell(2, 1);
+  [k{1}, c{1}, o{1}] = twosidedkernel(2);
   k{2} = k{1}.';
+  c{2} = c{1}.';
+  o{2} = o{1}.';
 end
 
-function [k] = twosidedkernel(M)
-  k = zeros(2 * M - 1, 7);
-  k(1:2:end, [1, 7]) = 1;
-  k(:, [3, 5]) = 1;
-  k([1, end], 4) = 1;
-  k = normalizekernel(k);
+function [k, c, o] = twosidedkernel(M)
+  c = zeros(2 * M - 1, 7);
+  o = zeros(2 * M - 1, 7);
+  c(1:2:end, [1, 7]) = 1;
+  o(:, [3, 5]) = 1;
+  o([1, end], 4) = 1;
+  k = normalizekernel(c | o);
 end
 
-function [y, mask] = addtwosidedkernel(y, r, k, m, n1, n2, mask)
+function [cntx, orly, mask, Nc] = addtwosidedkernel(cntx, orly, r, m, n1, n2, mask, Nc)
   [N1, N2] = size(r);
   switch m
     case 1
@@ -117,11 +137,10 @@ function [y, mask] = addtwosidedkernel(y, r, k, m, n1, n2, mask)
     n1p = n1 + (ns + 1) * s1;
     n2p = n2 + (ns + 1) * s2;
   end
-  switch m
-    case 1
-      kf = twosidedkernel(ns + 2);
-    case 2
-      kf = twosidedkernel(ns + 2).';
+  [~, c, o] = twosidedkernel(ns + 2);
+  if m == 2
+      c = c.';
+      o = o.';
   end
   if s1 < 0
     n1 = n1 + ns * s1;
@@ -129,17 +148,23 @@ function [y, mask] = addtwosidedkernel(y, r, k, m, n1, n2, mask)
   if s2 < 0
     n2 = n2 + ns * s2;
   end
-  [y, mask] = addkernel(y, kf, n1, n2, mask);
+  [cntx, orly, mask, Nc] = addkernel(cntx, orly, c, o, n1, n2, mask, Nc);
 end
 
-function [k] = resistencekernels()
+function [k, c, o] = resistencekernels()
   k = cell(2, 1);
-  k{1} = resistencekernel();
+  c = cell(2, 1);
+  o = cell(2, 1);
+  [k{1}, c{1}, o{1}] = resistencekernel();
   k{2} = k{1}.';
+  c{2} = c{1}.';
+  o{2} = o{1}.';
 end
 
-function [k] = resistencekernel()
-  k = normalizekernel([1, 0, 1]);
+function [k, c, o] = resistencekernel()
+  c = [1, 0, 1];
+  o = [0, 0, 0];
+  k = normalizekernel(c | o);
 end
 
 function [y] = normalizekernel(x)
@@ -179,9 +204,11 @@ function [rmax, m, n1, n2] = maxcorr(r)
   n2 = n2(m);
 end
 
-function [y, mask] = addkernel(y, k, n1, n2, mask)
-  [N1, N2] = size(k);
-  y(n1:(n1 + N1 - 1), n2:(n2 + N2 - 1)) = k > 0;
+function [cntx, orly, mask, Nc] = addkernel(cntx, orly, c, o, n1, n2, mask, Nc)
+  [N1, N2] = size(c);
+  Nc = Nc + 1;
+  cntx(n1:(n1 + N1 - 1), n2:(n2 + N2 - 1)) = c * Nc;
+  orly(n1:(n1 + N1 - 1), n2:(n2 + N2 - 1)) = o;
   mask(n1:(n1 + N1 - 1), n2:(n2 + N2 - 1)) = 0;
 end
 
@@ -195,4 +222,29 @@ function [r] = updatecorrs(r, k, mask)
            max(0, col(l) - N2k):min(N2r, col(l) + 1)) = 0;
     end
   end
+end
+
+function [dd] = directionalderivate(x, dx, dy, mask)
+  [N1, N2] = size(x);
+  dd = zeros(N1, N2);
+  for n1 = 1:N1
+    for n2 = 1:N2
+      count = 0;
+      if iswithinlimits(n1 - dx, N1) && iswithinlimits(n2 - dy, N2)
+        dd(n1, n2) = dd(n1, n2) + abs(x(n1, n2) - x(n1 - dx, n2 - dy));
+        count = count + 1;
+      end
+      if iswithinlimits(n1 + dx, N1) && iswithinlimits(n2 + dy, N2)
+        dd(n1, n2) = dd(n1, n2) + abs(x(n1 + dx, n2 + dy) - x(n1, n2));
+        count = count + 1;
+      end
+      if count > 0
+        dd(n1, n2) = dd(n1, n2) / count * x(n1, n2) * mask(n1, n2);
+      end
+    end
+  end
+end
+
+function [b] = iswithinlimits(x, N)
+  b = (x > 0) && (x <= N);
 end
