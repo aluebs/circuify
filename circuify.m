@@ -1,21 +1,11 @@
-function [cntx, orly, mask, v, h, du, dd] = circuify(img)
+function [cnxn, cntx, orly] = circuify(img)
   mindetail = 0.001;
   surfacewidth = 0.07;
   N = round(surfacewidth / mindetail);
   x = imgread(img, N);
-  cntx = zeros(N, N);
-  orly = zeros(N, N);
-  mask = ones(N, N);
-  Nc = 0;
-  [k4, c4, o4] = foursidedkernels(N);
-  [cntx, orly, mask, Nc] = addkernels(x, cntx, orly, mask, k4, c4, o4, Nc);
-  [cntx, orly, mask, Nc] = addtwosided(x, cntx, orly, mask, Nc);
-  [kr, cr, or] = resistencekernels();
-  [cntx, orly, mask, Nc] = addkernels(x, cntx, orly, mask, kr, cr, or, Nc);
-  v = directionalderivate(x, 1, 0, mask);
-  h = directionalderivate(x, 0, 1, mask);
-  du = directionalderivate(x, 1, 1, mask);
-  dd = directionalderivate(x, 1, -1, mask);
+  [cntx, orly, mask] = addallkernels(x);
+  cnxn = addconnections(x, cntx, mask);
+  cntx = cntx > 0;
 end
 
 function [x] = imgread(img, N)
@@ -38,6 +28,19 @@ function [y] = crop2square(x)
   [S1, S2] = size(x);
   S = min(S1, S2);
   y = x(((S1 - S) / 2 + 1):((S1 + S) / 2), ((S2 - S) / 2 + 1):((S2 + S) / 2));
+end
+
+function [cntx, orly, mask] = addallkernels(x)
+  [N1, N2] = size(x);
+  cntx = zeros(N1, N2);
+  orly = zeros(N2, N1);
+  mask = ones(N1, N2);
+  Nc = 0;
+  [k4, c4, o4] = foursidedkernels(min(N1, N2));
+  [cntx, orly, mask, Nc] = addkernels(x, cntx, orly, mask, k4, c4, o4, Nc);
+  [cntx, orly, mask, Nc] = addtwosided(x, cntx, orly, mask, Nc);
+  [kr, cr, or] = resistencekernels();
+  [cntx, orly, mask, Nc] = addkernels(x, cntx, orly, mask, kr, cr, or, Nc);
 end
 
 function [cntx, orly, mask, Nc] = addkernels(x, cntx, orly, mask, k, c, o, Nc)
@@ -224,6 +227,23 @@ function [r] = updatecorrs(r, k, mask)
   end
 end
 
+function [cnxn] = addconnections(x, cntx, mask)
+  [N1, N2] = size(x);
+  v = directionalderivate(x, 1, 0, mask);
+  h = directionalderivate(x, 0, 1, mask);
+  du = directionalderivate(x, 1, 1, mask);
+  dd = directionalderivate(x, 1, -1, mask);
+  mask = dilatemask(cntx, mask);
+  cnxn = zeros(N1, N2);
+  while sum(sum(x .* (cntx > 0))) > 0
+    [n1, n2] = maxcntx(x, cntx);
+    cmp = cntx(n1, n2);
+    cntx(n1, n2) = 0;
+    cmpmask = removesamecmp(cntx, cmp, mask);
+    [d1, d2] = getbestd(n1, n2, v, h, du, dd, cmpmask);
+  end
+end
+
 function [dd] = directionalderivate(x, dx, dy, mask)
   [N1, N2] = size(x);
   dd = zeros(N1, N2);
@@ -239,9 +259,84 @@ function [dd] = directionalderivate(x, dx, dy, mask)
         count = count + 1;
       end
       if count > 0
-        dd(n1, n2) = dd(n1, n2) / count * x(n1, n2) * mask(n1, n2);
+        dd(n1, n2) = dd(n1, n2) / count;
       end
     end
+  end
+  dd = dd .* x .* mask / norm([dx, dy]);
+end
+
+function [mask] = dilatemask(cntx, mask)
+  [N1, N2] = size(mask);
+  for n1 = 1:N1
+    for n2 = 1:N2
+      numcntx = 0;
+      for d1 = -1:1
+        for d2 = -1:1
+          if iswithinlimits(n1 + d1, N1) && iswithinlimits(n2 + d2, N2)
+            numcntx = numcntx + (cntx(n1 + d1, n2 + d2) > 0);
+          end
+        end
+      end
+    end
+  end
+end
+
+function [n1, n2] = maxcntx(x, cntx)
+  cntxweights = x .* (cntx > 0);
+  [~, n] = max(cntxweights(:));
+  [n1, n2] = ind2sub(size(cntxweights), n);
+end
+
+function [cmpmask] = removesamecmp(cntx, cmp, mask)
+  [N1, N2] = size(cntx);
+  cmpmask = mask;
+  [n1, n2] = find(cntx == cmp);
+  for n = 1:length(n1)
+    for d1 = -1:1
+      for d2 = -1:1
+        if iswithinlimits(n1(n) + d1, N1) && iswithinlimits(n2(n) + d2, N2)
+          cmpmask(n1(n), n2(n)) = 0;
+        end
+      end
+    end
+  end
+end
+
+function [d1, d2] = getbestd(n1, n2, v, h, du, dd, mask)
+  dl1 = [-1, -1, -1, 0, 0, 1, 1, 1];
+  dl2 = [-1, 0, 1, -1, 1, -1, 0, 1];
+  [d1, d2] = getbestdfromlist(n1, n2, dl1, dl2, v, h, du, dd, mask);
+end
+
+function [d1, d2] = getbestdfromlist(n1, n2, dl1, dl2, v, h, du, dd, mask)
+  d1 = 0;
+  d2 = 0;
+  dmax = 0;
+  for n = 1:length(dl1)
+    d = getd(n1, n2, dl1(n), dl2(n), v, h, du, dd, mask);
+    if d > dmax
+      dmax = d;
+      d1 = dl1(n);
+      d2 = dl2(n);
+    end
+  end
+end
+
+function [d] = getd(n1, n2, d1, d2, v, h, du, dd, mask)
+  [N1, N2] = size(mask);
+  d = inf;
+  if iswithinlimits(n1 + d1, N1) && iswithinlimits(n2 + d2, N2)
+    if d1 == 0
+      der = v .* mask;
+    elseif d2 == 0
+      der = h .* mask;
+    elseif d1 * d2 > 0
+      der = dd .* mask;
+    else
+      der = du .* mask;
+    end
+    d = der(n1 + d1, n2 + d2);
   end
 end
 
